@@ -8,7 +8,13 @@
 import { CreateRequestInput, EnvironmentClass, ValidationError } from './types';
 
 const SAFE_STRING_PATTERN = /^[a-zA-Z0-9_\-\.]{1,64}$/;
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Dots and hyphens are intentionally allowed: they are common in tenant IDs (e.g. "acme-corp",
+// "tenant.1") and safe here because values are only used in AWS account names and mock IDs,
+// never in file paths or shell commands. Full allow-list prevents injection.
+
+// ReDoS-safe email pattern: avoids nested quantifiers by using explicit character classes
+// and anchoring each segment length. Not RFC 5321 complete — intentionally simplified for security.
+const EMAIL_PATTERN = /^[a-zA-Z0-9._%+\-]{1,64}@[a-zA-Z0-9.\-]{1,253}$/;
 
 /**
  * Validates a CreateRequestInput.
