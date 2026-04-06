@@ -1,0 +1,16 @@
+{
+  "name": "custom-account-factory",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sprint 1 — Custom Account Factory: Organizations-first account provisioning platform",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint",
+    "dev:api": "pnpm --filter api run dev",
+    "dev:portal": "pnpm --filter portal run dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}
