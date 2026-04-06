@@ -43,8 +43,14 @@ export function validateCreateRequestInput(
 
   if (!req.tenantName || typeof req.tenantName !== 'string') {
     errors.push({ field: 'tenantName', message: 'tenantName is required and must be a string' });
+  } else if (req.tenantName.trim().length === 0) {
+    errors.push({ field: 'tenantName', message: 'tenantName must not be blank' });
   } else if (req.tenantName.length > 128) {
     errors.push({ field: 'tenantName', message: 'tenantName must not exceed 128 characters' });
+  } else if (/[<>"'`\\;]/.test(req.tenantName)) {
+    // Reject characters dangerous in HTML context, shell, or SQL — tenantName appears in
+    // account emails and account names submitted to Organizations in the real implementation.
+    errors.push({ field: 'tenantName', message: 'tenantName must not contain: < > " \' ` \\ ;' });
   }
 
   if (!req.environmentName || typeof req.environmentName !== 'string') {

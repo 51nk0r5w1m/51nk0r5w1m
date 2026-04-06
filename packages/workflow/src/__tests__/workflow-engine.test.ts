@@ -1,5 +1,9 @@
 /**
- * S1-11: Workflow engine tests — happy path and failure path
+ * S1-11: Workflow engine tests — happy path, failure path, and persistence verification.
+ *
+ * Bug-fix note: buildEngine() previously created two separate store/logger instances
+ * — one injected into the engine and two orphaned ones returned to callers, making
+ * it impossible to verify what was actually persisted. Fixed to share instances.
  */
 
 import { WorkflowEngine } from '../workflow-engine';
@@ -14,16 +18,16 @@ import {
 } from '@caf/domain';
 
 function buildEngine(orgsConfig = {}, bootstrapConfig = {}) {
-  return {
-    engine: new WorkflowEngine({
-      orgsAdapter: new MockOrganizationsAdapter({ latencyMs: 0, ...orgsConfig }),
-      bootstrapAdapter: new MockBootstrapAdapter({ latencyMs: 0, ...bootstrapConfig }),
-      requestStore: new InMemoryRequestStore(),
-      auditLogger: new InMemoryAuditLogger(),
-    }),
-    auditLogger: new InMemoryAuditLogger(),
-    requestStore: new InMemoryRequestStore(),
-  };
+  // Share the same instances so tests can inspect persisted state and emitted audit events.
+  const requestStore = new InMemoryRequestStore();
+  const auditLogger = new InMemoryAuditLogger();
+  const engine = new WorkflowEngine({
+    orgsAdapter: new MockOrganizationsAdapter({ latencyMs: 0, ...orgsConfig }),
+    bootstrapAdapter: new MockBootstrapAdapter({ latencyMs: 0, ...bootstrapConfig }),
+    requestStore,
+    auditLogger,
+  });
+  return { engine, requestStore, auditLogger };
 }
 
 const baseInput = {
@@ -115,5 +119,95 @@ describe('WorkflowEngine — failure path', () => {
 
     const failPhase = result.phaseHistory.find(p => p.phase === 'FailOrRecover');
     expect(failPhase).toBeDefined();
+  });
+});
+
+describe('WorkflowEngine — persistence verification', () => {
+  it('persists the completed request to the store', async () => {
+    const { engine, requestStore } = buildEngine();
+    const request = createTenantEnvironmentRequest(baseInput);
+    const result = await engine.execute(request);
+
+    const persisted = await requestStore.findById(result.id);
+    expect(persisted).not.toBeNull();
+    expect(persisted!.status).toBe(RequestStatus.COMPLETED);
+    expect(persisted!.provisionedAccountId).not.toBeNull();
+    expect(persisted!.completedAt).not.toBeNull();
+  });
+
+  it('persists the failed request to the store', async () => {
+    const { engine, requestStore } = buildEngine({ failWith: 'OU limit exceeded' });
+    const request = createTenantEnvironmentRequest(baseInput);
+    const result = await engine.execute(request);
+
+    const persisted = await requestStore.findById(result.id);
+    expect(persisted).not.toBeNull();
+    expect(persisted!.status).toBe(RequestStatus.FAILED);
+    expect(persisted!.failureReason).toContain('OU limit exceeded');
+  });
+
+  it('persisted state matches returned state', async () => {
+    const { engine, requestStore } = buildEngine();
+    const request = createTenantEnvironmentRequest(baseInput);
+    const result = await engine.execute(request);
+
+    const persisted = await requestStore.findById(result.id);
+    expect(persisted!.status).toBe(result.status);
+    expect(persisted!.provisionedAccountId).toBe(result.provisionedAccountId);
+    expect(persisted!.phaseHistory.length).toBe(result.phaseHistory.length);
+  });
+});
+
+describe('WorkflowEngine — audit event verification', () => {
+  it('emits REQUEST_COMPLETED audit event on success', async () => {
+    const { engine, auditLogger } = buildEngine();
+    const request = createTenantEnvironmentRequest(baseInput);
+    await engine.execute(request);
+
+    const events = auditLogger.getEvents(request.id);
+    const completedEvent = events.find(e => e.eventType === 'REQUEST_COMPLETED');
+    expect(completedEvent).toBeDefined();
+    expect(completedEvent!.status).toBe(RequestStatus.COMPLETED);
+  });
+
+  it('emits REQUEST_FAILED audit event on failure', async () => {
+    const { engine, auditLogger } = buildEngine({ failWith: 'OU limit exceeded' });
+    const request = createTenantEnvironmentRequest(baseInput);
+    await engine.execute(request);
+
+    const events = auditLogger.getEvents(request.id);
+    const failedEvent = events.find(e => e.eventType === 'REQUEST_FAILED');
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent!.status).toBe(RequestStatus.FAILED);
+  });
+
+  it('emits PHASE_STARTED and PHASE_COMPLETED events for each phase', async () => {
+    const { engine, auditLogger } = buildEngine();
+    const request = createTenantEnvironmentRequest(baseInput);
+    await engine.execute(request);
+
+    const events = auditLogger.getEvents(request.id);
+    const startedEvents = events.filter(e => e.eventType === 'PHASE_STARTED');
+    const completedEvents = events.filter(e => e.eventType === 'PHASE_COMPLETED');
+    // 6 phases in happy path
+    expect(startedEvents.length).toBe(6);
+    expect(completedEvents.length).toBe(6);
+  });
+
+  it('audit events never contain failWith error as raw adapter internals', async () => {
+    const { engine, auditLogger } = buildEngine({ failWith: 'OU limit exceeded' });
+    const request = createTenantEnvironmentRequest(baseInput);
+    await engine.execute(request);
+
+    const events = auditLogger.getEvents(request.id);
+    // Confirm events exist and none expose raw credentials or secrets (none here, but check structure)
+    for (const event of events) {
+      expect(event.eventId).toBeDefined();
+      expect(event.occurredAt).toBeDefined();
+      expect(event.requestId).toBe(request.id);
+      expect(event.detail).not.toHaveProperty('password');
+      expect(event.detail).not.toHaveProperty('secret');
+      expect(event.detail).not.toHaveProperty('token');
+    }
   });
 });

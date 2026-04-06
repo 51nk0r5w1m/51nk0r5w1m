@@ -44,4 +44,25 @@ describe('validateCreateRequestInput', () => {
     const errors = validateCreateRequestInput({ ...validInput, tenantId: 'a'.repeat(65) });
     expect(errors.some(e => e.field === 'tenantId')).toBe(true);
   });
+
+  it('rejects tenantName with HTML injection characters', () => {
+    const errors = validateCreateRequestInput({ ...validInput, tenantName: '<script>alert(1)</script>' });
+    expect(errors.some(e => e.field === 'tenantName')).toBe(true);
+  });
+
+  it('rejects tenantName with SQL injection characters', () => {
+    const errors = validateCreateRequestInput({ ...validInput, tenantName: "ACME'; DROP TABLE accounts;--" });
+    expect(errors.some(e => e.field === 'tenantName')).toBe(true);
+  });
+
+  it('rejects blank tenantName', () => {
+    const errors = validateCreateRequestInput({ ...validInput, tenantName: '   ' });
+    expect(errors.some(e => e.field === 'tenantName')).toBe(true);
+  });
+
+  it('accepts tenantName with spaces, hyphens, and ampersand', () => {
+    // Common business names must be accepted
+    const errors = validateCreateRequestInput({ ...validInput, tenantName: 'ACME Corp & Partners Ltd.' });
+    expect(errors.some(e => e.field === 'tenantName')).toBe(false);
+  });
 });
